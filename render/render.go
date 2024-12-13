@@ -88,7 +88,22 @@ func (r *Renderer) Destroy() {
 	r.runtime.Close(r.context)
 }
 
-// Render converts a TMD document into HTML.
+// Render converts a TMD document into HTML. Options:
+//   - fullHtml: whether or not generate full HTML page.
+//     To generate HTML pieces for embedding purpose, pass false.
+//   - supportCustomBlocks: whether or not support custom blocks.
+//
+// The format of tmdData:
+//  1. an uint8 length header of extra suffix for certain element IDs and names.
+//     It is followed by
+//  2. the extra suffix. Generally it is blank (so the uint8 header is zero).
+//     It is followed by
+//  3. an uint32 length header, followed by
+//  4. TMD content, which length must be equal to the uint32 value stored in the heaeder.
+//
+// The format of the htmlData:
+// 1. the length of the HTML output.
+// 2. HTML output, which length must be equal to the uint32 value stored in the heaeder.
 func (r *Renderer) Render(tmdData []byte, fullHtml bool, supportCustomBlocks bool) (htmlData []byte, err error) {
 	rets, err := r.funcBufferOffset.Call(r.context)
 	if err != nil {
