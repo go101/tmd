@@ -9,52 +9,70 @@ import (
 	"strings"
 
 	"go101.org/nstd"
-	"go101.org/tmd/render"
+	"go101.org/tmd/lib"
 )
 
-func printUsage() {
+// ToDo: lib version and the command version might be different.
+func printUsage(version []byte) {
 
-	fmt.Printf(`Usage:
-	%[1]v render [options] foo.tmd bar.tmd
+	fmt.Printf(`TapirMD toolset v%s
 
-Options:
+Usages:
+	%[2]v gen [gen-options] foo.tmd bar.tmd
+	%[2]v fmt foo.tmd bar.tmd
+
+gen-options:
 	--full-html
 		generate full page or not
 	--support-custom-blocks
 		support custom blocks or not
 `,
+		version,
 		filepath.Base(os.Args[0]),
 	)
 }
 
 func main() {
+	tmdLib, err := lib.NewTmdLib()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tmdLib.Destroy()
+
+	libVersion, err := tmdLib.Version()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	flag.Parse()
 
 	args := flag.Args()
 	switch len(args) {
 	case 0:
-		printUsage()
+		printUsage(libVersion)
 		return
-	case 1:
+	default:
 		switch sub := args[0]; sub {
 		default:
 			nstd.Printfln("Unkown sub-command: %s", sub)
-			printUsage()
-			return
-		case "render":
+			printUsage(libVersion)
+		case "gen":
 			if len(args) == 1 {
-				printUsage()
+				printUsage(libVersion)
 				return
 			}
+			generateHTML(tmdLib, args[1:])
+		case "fmt":
+			if len(args) == 1 {
+				printUsage(libVersion)
+				return
+			}
+			formatTMD(tmdLib, args[1:])
 		}
 	}
+}
 
-	renderer, err := render.NewRenderer()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer renderer.Destroy()
-
+func generateHTML(tmdLib *lib.TmdLib, args []string) {
 	const tmdExt = ".tmd"
 	const htmlExt = ".html"
 
@@ -62,7 +80,7 @@ func main() {
 	var option_full_html = false
 	var option_support_custom_blocks = false
 
-	for _, arg := range args[1:] {
+	for _, arg := range args {
 		if strings.HasPrefix(arg, "--") {
 			if !optionsDone {
 				switch arg[2:] {
@@ -80,22 +98,23 @@ func main() {
 			optionsDone = true
 		}
 
-		tmdData, err := os.ReadFile(arg)
+		var tmdFilePath = arg
+		tmdData, err := os.ReadFile(tmdFilePath)
 		if err != nil {
-			log.Printf("read TMD file [%s] error: %s", arg, err)
+			log.Printf("read TMD file [%s] error: %s", tmdFilePath, err)
 			continue
 		}
-		htmlData, err := renderer.Render(tmdData, option_full_html, option_support_custom_blocks)
+		htmlData, err := tmdLib.GenerateHTML(tmdData, option_full_html, option_support_custom_blocks)
 		if err != nil {
-			log.Printf("render file [%s] error: %s", arg, err)
+			log.Printf("geneate HTML file [%s] error: %s", tmdFilePath, err)
 			continue
 		}
 
 		var htmlFilepath string
-		if strings.HasSuffix(strings.ToLower(arg), tmdExt) {
-			htmlFilepath = arg[0:len(arg)-len(tmdExt)] + htmlExt
+		if strings.HasSuffix(strings.ToLower(tmdFilePath), tmdExt) {
+			htmlFilepath = tmdFilePath[0:len(tmdFilePath)-len(tmdExt)] + htmlExt
 		} else {
-			htmlFilepath = arg + htmlExt
+			htmlFilepath = tmdFilePath + htmlExt
 		}
 		err = os.WriteFile(htmlFilepath, htmlData, 0644)
 		if err != nil {
@@ -105,6 +124,38 @@ func main() {
 
 		fmt.Printf(`%s (%d bytes)
 -> %s (%d bytes)
-`, arg, len(tmdData), htmlFilepath, len(htmlData))
+`, tmdFilePath, len(tmdData), htmlFilepath, len(htmlData))
+	}
+}
+
+func formatTMD(tmdLib *lib.TmdLib, args []string) {
+	for _, arg := range args {
+		var tmdFilePath = arg
+		fileInfo, err := os.Stat(tmdFilePath)
+		if err != nil {
+			log.Printf("stat TMD file [%s] error: %s", tmdFilePath, err)
+			continue
+		}
+		tmdData, err := os.ReadFile(tmdFilePath)
+		if err != nil {
+			log.Printf("read TMD file [%s] error: %s", tmdFilePath, err)
+			continue
+		}
+		// fileInfo.Size() == len(tmdData)
+		formatData, err := tmdLib.FormatTMD(tmdData)
+		if err != nil {
+			log.Printf("format TMD file [%s] error: %s", tmdFilePath, err)
+			continue
+		}
+
+		if formatData != nil {
+			err = os.WriteFile(tmdFilePath, formatData, fileInfo.Mode())
+			if err != nil {
+				log.Printf("write TMD file [%s] error: %s", tmdFilePath, err)
+				continue
+			}
+
+			fmt.Printf("%s\n", tmdFilePath)
+		}
 	}
 }

@@ -1,4 +1,4 @@
-package render
+package lib
 
 import "bytes"
 import "testing"
@@ -13,12 +13,12 @@ type testCase struct {
 	expectedMaxOutputLength int // inclusive if not negative
 }
 
-func TestRenderer(t *testing.T) {
-	renderer, err := NewRenderer()
+func TestTmdLib(t *testing.T) {
+	tmdLib, err := NewTmdLib()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer renderer.Destroy()
+	defer tmdLib.Destroy()
 
 	testCases := []testCase{
 		{
@@ -63,9 +63,9 @@ func TestRenderer(t *testing.T) {
 	}
 
 	for i, testCase := range testCases {
-		htmlData, err := renderer.Render([]byte(testCase.tmdData), testCase.fullHtml, testCase.supportCustomBlocks)
+		htmlData, err := tmdLib.GenerateHTML([]byte(testCase.tmdData), testCase.fullHtml, testCase.supportCustomBlocks)
 		if err != nil {
-			t.Fatalf("[test case %d]: render error: %s", i, err)
+			t.Fatalf("[test case %d]: generate HTML error: %s", i, err)
 			return
 		}
 		if len(htmlData) < testCase.expectedMinOutputLength {
@@ -76,12 +76,41 @@ func TestRenderer(t *testing.T) {
 			t.Fatalf("[test case %d]: output is too long (%d > %d)", i, len(htmlData), testCase.expectedMaxOutputLength)
 			return
 		}
+
+		formatted, err := tmdLib.FormatTMD([]byte(testCase.tmdData))
+		if err != nil {
+			t.Fatalf("[test case %d]: format TMD error: %s", i, err)
+			return
+		}
+		formatted = bytes.Clone(formatted) // ! old formatted will be overwritten
+		if formatted != nil {
+			htmlData2, err := tmdLib.GenerateHTML(formatted, testCase.fullHtml, testCase.supportCustomBlocks)
+			if err != nil {
+				t.Fatalf("[test case %d]: generate HTML error 2: %s", i, err)
+				return
+			}
+			if !bytes.Equal(htmlData2, htmlData) {
+				t.Fatalf("[test case %d]: different generated HTML", i)
+				return
+			}
+
+			formatted2, err := tmdLib.FormatTMD(formatted)
+			if err != nil {
+				t.Fatalf("[test case %d]: format TMD error 2: %s", i, err)
+				return
+			}
+			if formatted2 != nil {
+				t.Fatalf("[test case %d]: format(formatted) != formatted\n%s\n%s\n", i, formatted, formatted2)
+				return
+			}
+		}
+
 	}
 
 	var tmdData = bytes.Repeat([]byte("foo "), 1<<18)
 	var lastLength = -1
 	for i := range 100 {
-		output, err := renderer.Render(tmdData, true, true)
+		output, err := tmdLib.GenerateHTML(tmdData, true, true)
 		if err != nil {
 			t.Fatalf("[stress testing at step %d] error: %s", i, err)
 			return
