@@ -63,7 +63,7 @@ func TestTmdLib(t *testing.T) {
 	}
 
 	for i, testCase := range testCases {
-		htmlData, err := tmdLib.GenerateHTML([]byte(testCase.tmdData), testCase.fullHtml, testCase.supportCustomBlocks)
+		htmlData, err := tmdLib.GenerateHtmlFromTmd([]byte(testCase.tmdData), testCase.fullHtml, testCase.supportCustomBlocks)
 		if err != nil {
 			t.Fatalf("[test case %d]: generate HTML error: %s", i, err)
 			return
@@ -77,14 +77,14 @@ func TestTmdLib(t *testing.T) {
 			return
 		}
 
-		formatted, err := tmdLib.FormatTMD([]byte(testCase.tmdData))
+		formatted, err := tmdLib.FormatTmd([]byte(testCase.tmdData))
 		if err != nil {
 			t.Fatalf("[test case %d]: format TMD error: %s", i, err)
 			return
 		}
 		formatted = bytes.Clone(formatted) // ! old formatted will be overwritten
 		if formatted != nil {
-			htmlData2, err := tmdLib.GenerateHTML(formatted, testCase.fullHtml, testCase.supportCustomBlocks)
+			htmlData2, err := tmdLib.GenerateHtmlFromTmd(formatted, testCase.fullHtml, testCase.supportCustomBlocks)
 			if err != nil {
 				t.Fatalf("[test case %d]: generate HTML error 2: %s", i, err)
 				return
@@ -94,7 +94,7 @@ func TestTmdLib(t *testing.T) {
 				return
 			}
 
-			formatted2, err := tmdLib.FormatTMD(formatted)
+			formatted2, err := tmdLib.FormatTmd(formatted)
 			if err != nil {
 				t.Fatalf("[test case %d]: format TMD error 2: %s", i, err)
 				return
@@ -110,7 +110,7 @@ func TestTmdLib(t *testing.T) {
 	var tmdData = bytes.Repeat([]byte("foo "), 1<<18)
 	var lastLength = -1
 	for i := range 100 {
-		output, err := tmdLib.GenerateHTML(tmdData, true, true)
+		output, err := tmdLib.GenerateHtmlFromTmd(tmdData, true, true)
 		if err != nil {
 			t.Fatalf("[stress testing at step %d] error: %s", i, err)
 			return

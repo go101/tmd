@@ -3,9 +3,11 @@ package lib
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"sync/atomic"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -16,6 +18,7 @@ import (
 //go:embed tmd.wasm
 var tmdWasm []byte
 
+// All methods of TmdLib are not concurently safe.
 type TmdLib struct {
 	context context.Context
 
@@ -28,6 +31,8 @@ type TmdLib struct {
 	funcGetVersion   api.Function
 	funcTmdToHtml    api.Function
 	funcTmdFormat    api.Function
+
+	tmdDataValid atomic.Bool
 }
 
 func printMessages(_ context.Context, m api.Module, offset, byteCount, offset2, byteCount2 uint32, extraInt32 int32) {
@@ -94,6 +99,7 @@ func (lib *TmdLib) Destroy() {
 	lib.runtime.Close(lib.context)
 }
 
+// Version returns the version of library.
 func (lib *TmdLib) Version() (version []byte, err error) {
 	rets, err := lib.funcBufferOffset.Call(lib.context)
 	if err != nil {
@@ -109,6 +115,8 @@ func (lib *TmdLib) Version() (version []byte, err error) {
 	//if !ok {
 	//	return nil, fmt.Errorf("Memory.ReadUint32Le(%d) not okay (max input length)", bufferOffset)
 	//}
+
+	lib.tmdDataValid.Store(false)
 
 	rets, err = lib.funcGetVersion.Call(lib.context)
 	if err != nil {
@@ -134,43 +142,55 @@ func (lib *TmdLib) Version() (version []byte, err error) {
 	return version, nil
 }
 
-// GenerateHTML converts a TMD document into HTML. Options:
-//   - fullHtml: whether or not generate full HTML page.
-//     To generate HTML pieces for embedding purpose, pass false.
-//   - supportCustomBlocks: whether or not support custom blocks.der.
-func (lib *TmdLib) GenerateHTML(tmdData []byte, fullHtml bool, supportCustomBlocks bool) (htmlData []byte, err error) {
+// WriteInputTmd prepares the input TMD data for later using.
+func (lib *TmdLib) WriteInputTmd(tmdData []byte) error {
 	rets, err := lib.funcBufferOffset.Call(lib.context)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if int32(rets[0]) < 0 {
-		return nil, fmt.Errorf("Bad input offset: %d", int32(rets[0]))
+		return fmt.Errorf("Bad input offset: %d", int32(rets[0]))
 	}
 
 	bufferOffset := uint32(rets[0])
 
 	maxInputLength, ok := lib.memory.ReadUint32Le(bufferOffset)
 	if !ok {
-		return nil, fmt.Errorf("Memory.ReadUint32Le(%d) not okay (max input length)", bufferOffset)
+		return fmt.Errorf("Memory.ReadUint32Le(%d) not okay (max input length)", bufferOffset)
 	}
 
 	if !lib.memory.WriteByte(bufferOffset, 0) {
-		return nil, fmt.Errorf("Memory.WriteByte(%d, %d) not okay", bufferOffset+4, 0)
+		return fmt.Errorf("Memory.WriteByte(%d, %d) not okay", bufferOffset+4, 0)
 	}
 
 	if uint32(len(tmdData)) > maxInputLength {
-		return nil, fmt.Errorf("Input length too large (%d > %d)", len(tmdData), maxInputLength)
+		return fmt.Errorf("Input length too large (%d > %d)", len(tmdData), maxInputLength)
 	}
 
 	if !lib.memory.WriteUint32Le(bufferOffset+1, uint32(len(tmdData))) {
-		return nil, fmt.Errorf("Memory.WriteUint32Le(%d, %d) not okay", bufferOffset, len(tmdData))
+		return fmt.Errorf("Memory.WriteUint32Le(%d, %d) not okay", bufferOffset, len(tmdData))
 	}
 
 	if !lib.memory.Write(bufferOffset+5, tmdData) {
-		return nil, fmt.Errorf("Memory.WriteString(%d, %s) not okay", bufferOffset+4, tmdData)
+		return fmt.Errorf("Memory.WriteString(%d, %s) not okay", bufferOffset+4, tmdData)
 	}
 
-	rets, err = lib.funcTmdToHtml.Call(lib.context, uint64(nstd.Btoi(fullHtml)), uint64(nstd.Btoi(supportCustomBlocks)))
+	lib.tmdDataValid.Store(true)
+
+	return nil
+}
+
+// GenerateHtml converts the written input TMD into HTML.
+// Options:
+//   - fullHtml: whether or not generate full HTML page.
+//     To generate HTML pieces for embedding purpose, pass false.
+//   - supportCustomBlocks: whether or not support custom blocks.
+func (lib *TmdLib) GenerateHtml(fullHtml bool, supportCustomBlocks bool) (htmlData []byte, err error) {
+	if !lib.tmdDataValid.Load() {
+		return nil, errors.New("input TMD is invalid")
+	}
+
+	rets, err := lib.funcTmdToHtml.Call(lib.context, uint64(nstd.Btoi(fullHtml)), uint64(nstd.Btoi(supportCustomBlocks)))
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +202,7 @@ func (lib *TmdLib) GenerateHTML(tmdData []byte, fullHtml bool, supportCustomBloc
 
 	outputLength, ok := lib.memory.ReadUint32Le(outputOffset)
 	if !ok {
-		return nil, fmt.Errorf("Memory.ReadUint32Le(%d) not okay (output length)", bufferOffset)
+		return nil, fmt.Errorf("Memory.ReadUint32Le(%d) not okay (output length)", outputOffset)
 	}
 
 	output, ok := lib.memory.Read(outputOffset+4, outputLength)
@@ -193,40 +213,24 @@ func (lib *TmdLib) GenerateHTML(tmdData []byte, fullHtml bool, supportCustomBloc
 	return output, nil
 }
 
-// FormatTMD formats a TMD document.
-func (lib *TmdLib) FormatTMD(tmdData []byte) (formattedData []byte, err error) {
-	rets, err := lib.funcBufferOffset.Call(lib.context)
+// GenerateHtmlFromTmd converts a TMD document into HTML.
+// The options are the same as [GenerateHtml].
+func (lib *TmdLib) GenerateHtmlFromTmd(tmdData []byte, fullHtml bool, supportCustomBlocks bool) (htmlData []byte, err error) {
+	err = lib.WriteInputTmd(tmdData)
 	if err != nil {
-		return nil, err
-	}
-	if int32(rets[0]) < 0 {
-		return nil, fmt.Errorf("Bad input offset: %d", int32(rets[0]))
+		return nil, fmt.Errorf("Write input TMD error (%w)", err)
 	}
 
-	bufferOffset := uint32(rets[0])
+	return lib.GenerateHtml(fullHtml, supportCustomBlocks)
+}
 
-	maxInputLength, ok := lib.memory.ReadUint32Le(bufferOffset)
-	if !ok {
-		return nil, fmt.Errorf("Memory.ReadUint32Le(%d) not okay (max input length)", bufferOffset)
+// Format formats the written input TMD.
+func (lib *TmdLib) Format() (formattedData []byte, err error) {
+	if !lib.tmdDataValid.Load() {
+		return nil, errors.New("input TMD is invalid")
 	}
 
-	if !lib.memory.WriteByte(bufferOffset, 0) {
-		return nil, fmt.Errorf("Memory.WriteByte(%d, %d) not okay", bufferOffset+4, 0)
-	}
-
-	if uint32(len(tmdData)) > maxInputLength {
-		return nil, fmt.Errorf("Input length too large (%d > %d)", len(tmdData), maxInputLength)
-	}
-
-	if !lib.memory.WriteUint32Le(bufferOffset+1, uint32(len(tmdData))) {
-		return nil, fmt.Errorf("Memory.WriteUint32Le(%d, %d) not okay", bufferOffset, len(tmdData))
-	}
-
-	if !lib.memory.Write(bufferOffset+5, tmdData) {
-		return nil, fmt.Errorf("Memory.WriteString(%d, %s) not okay", bufferOffset+4, tmdData)
-	}
-
-	rets, err = lib.funcTmdFormat.Call(lib.context)
+	rets, err := lib.funcTmdFormat.Call(lib.context)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +242,7 @@ func (lib *TmdLib) FormatTMD(tmdData []byte) (formattedData []byte, err error) {
 
 	formatLength, ok := lib.memory.ReadUint32Le(formatOffset)
 	if !ok {
-		return nil, fmt.Errorf("Memory.ReadUint32Le(%d) not okay (format length)", bufferOffset)
+		return nil, fmt.Errorf("Memory.ReadUint32Le(%d) not okay (format length)", formatOffset)
 	}
 	if formatLength == 0 {
 		return nil, nil
@@ -250,4 +254,14 @@ func (lib *TmdLib) FormatTMD(tmdData []byte) (formattedData []byte, err error) {
 	}
 
 	return formatted, nil
+}
+
+// FormatTmd formats a TMD document.
+func (lib *TmdLib) FormatTmd(tmdData []byte) (formattedData []byte, err error) {
+	err = lib.WriteInputTmd(tmdData)
+	if err != nil {
+		return nil, fmt.Errorf("Write input TMD error (%w)", err)
+	}
+
+	return lib.Format()
 }

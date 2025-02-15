@@ -104,7 +104,7 @@ func generateHTML(tmdLib *lib.TmdLib, args []string) {
 			log.Printf("read TMD file [%s] error: %s", tmdFilePath, err)
 			continue
 		}
-		htmlData, err := tmdLib.GenerateHTML(tmdData, option_full_html, option_support_custom_blocks)
+		htmlData, err := tmdLib.GenerateHtmlFromTmd(tmdData, option_full_html, option_support_custom_blocks)
 		if err != nil {
 			log.Printf("geneate HTML file [%s] error: %s", tmdFilePath, err)
 			continue
@@ -142,7 +142,7 @@ func formatTMD(tmdLib *lib.TmdLib, args []string) {
 			continue
 		}
 		// fileInfo.Size() == len(tmdData)
-		formatData, err := tmdLib.FormatTMD(tmdData)
+		formatData, err := tmdLib.FormatTmd(tmdData)
 		if err != nil {
 			log.Printf("format TMD file [%s] error: %s", tmdFilePath, err)
 			continue
